@@ -1,4 +1,39 @@
+# Project Structure 
+```
+proteomics_in_latent_space/                 # 🔹 Project Root (Main Working Directory)
+│
+├── running_script.py                       # 🔹 Main script to train the models 
+│
+├── models_util/                            # 🔹 Package for all python modules 
+│   ├── __init__.py                        
+│   ├── configs.py                           # ⚙️  Handles seeds  & device configuration
+│   ├── cost_functions.py                   # 📊  VAE cost functions 
+│   ├── custom_dataset.py                   # 🗂️  Handles dataset loading in pytorch
+│   ├── utility_functions.py                # ⚙️  Useful functions VAE training  
+│   ├── VAE1.py                             #      Variational autoencoder 
+│
+├── r_util/                                 #  R scripts & utilities for analysis 
+│   ├──                                     # 
+│   ├──                                     #
+│
+├── data/                                   # 🔹 Folder to store datasets
+│   ├── processed/
+│       ├── prot_abms_norm.txt              # 📜 Total Cell proteomics
+│       ├── protein_quant_merged.txt        # 📜 Subcellular proteomics   
+│   ├── raw/
+│       ├──                        
+│
+├── outputs/                                # 📁 Stores trained models & logs
+│   ├── trained_model.pth                   # 🎯 Saved PyTorch model checkpoint
+│   ├── training_logs.txt                    # 📄 Training logs & results
+│
+├── requirements.txt                        # Dependencies
+
+```
+
+
 ## Table of Contents
+
 
 
 ### Making the Project Reproducible (seed and device check)
