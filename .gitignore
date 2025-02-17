@@ -1,6 +1,10 @@
 # ignore everything in the data directory
 data/*
+figures/*
 
 # make exception for the README file
 !data/raw/README.md
 !data/processed/README.md 
+!figures/README.md
+
+notes.md

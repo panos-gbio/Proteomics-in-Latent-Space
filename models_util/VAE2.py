@@ -52,7 +52,8 @@ class VAE(nn.Module):
                  n_features: int,
                  latent_dim: int,
                  hidden_layer : bool = False,
-                 hidden_dim: int = None,
+                 hidden_dim_1: int = None,
+                 hidden_dim_2: int = None,
                  sigmoid = True):
         """
         Parameters:
@@ -85,7 +86,8 @@ class VAE(nn.Module):
         # Load the parameters 
         self.n_features = n_features
         self.hidden_layer = hidden_layer
-        self.hidden_dim = hidden_dim
+        self.hidden_dim_1 = hidden_dim_1
+        self.hidden_dim_2 = hidden_dim_2
         self.latent_dim = latent_dim
         self.sigmoid = sigmoid
 
@@ -98,13 +100,17 @@ class VAE(nn.Module):
         else:
             self.encoder = nn.Sequential(
             # one hidden layer
-            nn.Linear(in_features=self.n_features, out_features=self.hidden_dim),
+            nn.Linear(in_features=self.n_features, out_features=self.hidden_dim_1),
             nn.Dropout(0.2),
-            nn.BatchNorm1d(self.hidden_dim),
+            nn.BatchNorm1d(self.hidden_dim_1),
+            nn.LeakyReLU(.1),
+            nn.Linear(in_features=self.hidden_dim_1, out_features=self.hidden_dim_2),
+            nn.Dropout(0.2),
+            nn.BatchNorm1d(self.hidden_dim_2),
             nn.LeakyReLU(.1),
 
             # Latent Space: z_mu and z_logvar 
-            nn.Linear(self.hidden_dim, self.latent_dim * 2)
+            nn.Linear(self.hidden_dim_2, self.latent_dim * 2)
             )
        
         
@@ -122,18 +128,22 @@ class VAE(nn.Module):
             self.head_logvar = nn.Linear(latent_dim, n_features)
 
 
-        # Decoder with one hidden layer 
+        # Decoder with two hidden layer 
         else:
             # Common corpus of the decoder
             self.decoder_common = nn.Sequential(
             # From latent to hidden 
-            nn.Linear(self.latent_dim, self.hidden_dim),
+            nn.Linear(self.latent_dim, self.hidden_dim_2),
             nn.Dropout(0.2),
-            nn.BatchNorm1d(self.hidden_dim),
+            nn.BatchNorm1d(self.hidden_dim_2),
+            nn.LeakyReLU(.1),
+            nn.Linear(self.latent_dim_2, self.hidden_dim_1),
+            nn.Dropout(0.2),
+            nn.BatchNorm1d(self.hidden_dim_1),
             nn.LeakyReLU(.1))
 
             # Decoder output separated in two heads: x_mu and x_logvar 
-            head_mu_list = [nn.Linear(self.hidden_dim, self.n_features)]
+            head_mu_list = [nn.Linear(self.hidden_dim_1, self.n_features)]
             if sigmoid == True:
                 head_mu_list.append(nn.Sigmoid())
             
@@ -141,7 +151,7 @@ class VAE(nn.Module):
             self.head_mu = nn.Sequential(*head_mu_list)
             
             # unpack the n x_logvar variables 
-            self.head_logvar = nn.Linear(self.hidden_dim, self.n_features)
+            self.head_logvar = nn.Linear(self.hidden_dim_1, self.n_features)
 
 
     def encode(self, x: torch.tensor):

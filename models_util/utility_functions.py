@@ -8,6 +8,7 @@
 import numpy as np
 import pandas as pd
 import numpy.random as nrd
+import matplotlib.pyplot as plt 
 
 # Pytorch modules 
 import torch
@@ -22,7 +23,7 @@ from sklearn.model_selection import train_test_split
 from models_util import configs
 
 
-# set the device and seed. Eetrieve seed and run the set_seed() for reproducibility 
+# set the device and seed. Retrieve seed and run the set_seed() for reproducibility 
 device = configs.get_device()
 seed = configs.get_seed()
 configs.set_seed(seed)
@@ -63,3 +64,67 @@ if __name__ == "__main__":
     print("Run the script locally")
 else:
     print(f"Importing {__name__}, running in {device} with seed: {seed}" )
+
+
+
+
+def plot_training_loss_sp(ax, minibatch_losses, num_epochs, averaging_iterations=20, custom_label=''):
+    """
+    Plots batch and batch-average loss in x axis.
+    It returns matplotlib ax plots, so it can be used in subplots.
+    Based on Sebastian Racschka's code. 
+    
+    Parameters:
+      ax: matplotlib axis on which to plot.
+      minibatch_losses: list/array of loss values per iteration.
+      num_epochs: total number of epochs.
+      averaging_iterations: window size for computing the running average.
+      custom_label: A label for the specific loss type.
+    """
+    iter_per_epoch = len(minibatch_losses) // num_epochs
+
+    # Plot raw loss
+    ax.plot(range(len(minibatch_losses)),
+            minibatch_losses,
+            label=f'Minibatch Loss{custom_label}',
+            color="green", alpha=0.8)
+    ax.set_xlabel('Iterations')
+    ax.set_ylabel('Loss')
+
+    # Set y-axis limits if losses are positive (adjust based on later iterations)
+    if len(minibatch_losses) < 1000:
+        num_losses = len(minibatch_losses) // 2
+    else:
+        num_losses = 1000
+
+    # set y-axis limits based on prior knowledge of losses 
+    if np.min(minibatch_losses) > 0:
+        ax.set_ylim([
+            np.min(minibatch_losses[num_losses:]) * 0.98,
+            np.max(minibatch_losses[num_losses:]) * 1.02
+        ])
+
+    # Plot running average of the loss
+    running_avg = np.convolve(minibatch_losses,
+                              np.ones(averaging_iterations) / averaging_iterations,
+                              mode='valid')
+    ax.plot(running_avg,
+            label=f'Running Average{custom_label}',
+            color="purple")
+    ax.legend()
+
+    # Create a second x-axis for epochs.
+    ax2 = ax.twiny()
+    new_labels = list(range(num_epochs + 1))
+    new_positions = [e * iter_per_epoch for e in new_labels]
+    
+    # Show only every 5th label 
+    ax2.set_xticks(new_positions[::5])
+    ax2.set_xticklabels(new_labels[::5])
+    ax2.xaxis.set_ticks_position('bottom')
+    ax2.xaxis.set_label_position('bottom')
+    ax2.spines['bottom'].set_position(('outward', 45))
+    ax2.set_xlabel('Epochs')
+    ax2.set_xlim(ax.get_xlim())
+    
+    plt.tight_layout()
