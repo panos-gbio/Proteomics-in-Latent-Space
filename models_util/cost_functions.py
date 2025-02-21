@@ -33,8 +33,12 @@ log_of_2 = torch.log(torch.tensor(2., device=device))
 
 
 def kld_loss(z_mu, z_logvar):
+    # classical interpretation of KL divergence 
     return 0.5 * (z_mu**2 + torch.exp(z_logvar) - 1 - z_logvar)
     
+# def get_kl_perdim():
+
+
 
 def gaussian_loss(x_batch, x_mu, x_logvar, mask):
         
@@ -74,14 +78,18 @@ def loss_fun(x_batch, x_mu, x_logvar, z_mu, z_logvar,lst,mask=None,freebits=0.1)
     # if mask.shape != x_batch.shape:
     #     raise TypeError("The dimensions of batch and mask matrices do not match")
     
-    # Important, both losses to be of one value after matrix operations 
     l_rec = gaussian_loss(x_batch, x_mu, x_logvar, mask)
-    l_reg = torch.sum((F.relu(kld_loss(z_mu, z_logvar) # it sums all the latents/row of each dimension 
-                              - freebits * log_of_2)    # returns a scalar per batch 
+    l_reg = torch.sum((F.relu(kld_loss(z_mu, z_logvar) # it sums all the latent-dimension/row-sample
+                              - freebits * log_of_2)    # returns a scalar per row 
                        + freebits * log_of_2),
                       1)
-    l_reg = torch.mean(l_reg) #mean per batch 
-    lst.append(l_rec)
+    l_reg = torch.mean(l_reg) #mean KL per batch  (mean of all row samples)
+
+    # store the losses as numbers and not tensors for loss curves 
+    lst.append(l_rec.detach().item())
+    lst.append(l_reg.detach().item())
+    
+    # this returns them as tensors - necessary for backprop. 
     return l_rec + l_reg
 
 
