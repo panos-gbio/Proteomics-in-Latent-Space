@@ -303,3 +303,180 @@ for epoch in tqdm(range(epoch+1)):
 
         ## Print out what's happening
         print(f"\nTrain loss: {train_loss:.3f}|Train Rec: {train_rl:.3f} | Val loss: {val_loss:.3f}, Val Rec: {val_rl:.3f}\n")
+
+
+
+
+
+
+###### test set analysis func
+
+# use the trained model and its parameters 
+print(f"Using this model {model_id}")
+
+# the original and reconstructed tensors will be usefull for observations 
+test_iter_dict = {
+    "iteration": [],
+    "Test total Loss": [],
+    "Test KL Loss": [], 
+    "Test Rec Loss": [],
+    "Test batch index": [],
+    "x_orig tensors": [],
+    "x_mu tensors": [],
+    "masks": []
+    }
+test_metrics = {
+    "avg_total_loss":0,
+    "avg_kl_loss": 0,
+    "avg_rl_loss": 0,
+    "avg_kl_perdim": 0
+}
+lst = []
+model.eval()
+test_loss, test_kl, test_rl = 0,0,0
+_iter = 1 
+with torch.inference_mode():
+    for tbatch, tmask, tidx in test_loader:
+
+        x_mu, x_logvar, z_mu, z_logvar = model(tbatch) # forward step 
+        loss = loss_fun(tbatch, x_mu, x_logvar, z_mu, z_logvar,lst,mask=tmask,freebits=freebits) #loss calculation 
+        
+        # sum the losses batch by batch 
+        test_loss += loss.detach().item()
+        test_kl += lst[-1]
+        test_rl += lst[-2]
+
+        # metrics per Batch-Iteration (append loss fn outputs as values)
+        test_iter_dict["iteration"].append(_iter)
+        test_iter_dict["Test total Loss"].append(loss.detach().item())
+        test_iter_dict["Test KL Loss"].append(lst[-1])
+        test_iter_dict["Test Rec Loss"].append(lst[-2])
+        # list of tensors with sample indices and the samples original, reconstructed 
+        test_iter_dict["Test batch index"].append(tidx.detach()) 
+        test_iter_dict["x_orig tensors"].append(tbatch.detach())
+        test_iter_dict["x_mu tensors"].append(x_mu.detach())
+        test_iter_dict["masks"].append(tmask.detach())
+        
+        # update batch
+        _iter += 1
+        
+    # divide by all the batches to get average loss for whole test set  
+    test_loss = test_loss/len(test_loader)
+    test_kl = test_kl/len(test_loader)
+    test_rl = test_rl/len(test_loader)
+
+    # metrics of the whole test set
+    test_metrics["avg_total_loss"] = test_loss
+    test_metrics["avg_kl_loss"] = test_kl
+    test_metrics["avg_rl_loss"] = test_rl
+
+
+
+
+#########  test_losscurve_plot 
+
+selected_keys = ["iteration","Test total Loss","Test KL Loss","Test Rec Loss"]
+
+print(f"Using this model {model_id}")
+
+# list comprehension of the dictionary keys/columns i want to keep
+cols = [key for key in test_iter_dict.keys() if key in selected_keys]
+
+# dictionary comprehension and dataframe convertion = get the columns and the whole dataframe 
+testdf = pd.DataFrame({key: test_iter_dict[key] for key in cols})
+testdf
+
+# plot the test metrics per iteration and average values
+fig, axes = plt.subplots(3,1,figsize=(8,8),sharex=True)
+
+
+# Plot RL loss
+ax1 = sns.lineplot(
+    testdf,x=testdf["iteration"], y=testdf["Test Rec Loss"],
+    lw = 2, color = "royalblue", alpha = 0.7, label="Rec Error",
+    marker = "o",ax=axes[0],markerfacecolor="black")
+
+ax1.set_ylim([
+    np.min(testdf["Test Rec Loss"])*1.03,
+    np.max(testdf["Test Rec Loss"])*0.92
+])
+
+ax1.axhline(y=test_metrics["avg_rl_loss"], color='black', linestyle='--', linewidth=1, label=f'Average: {round(test_metrics["avg_rl_loss"],2)}')
+ax1.legend(frameon = False, ncol=2)
+
+
+# plot KL loss
+ax2 = sns.lineplot(
+    testdf,x=testdf["iteration"], y=testdf["Test KL Loss"],
+    lw = 2, color = "royalblue", alpha = 0.7, label="KL Error",
+    marker = "o",ax=axes[1],markerfacecolor="black")
+
+ax2.set_ylim([
+    np.min(testdf["Test KL Loss"])*0.999,
+    np.max(testdf["Test KL Loss"])*1.001
+])
+
+
+ax2.axhline(y=test_metrics["avg_kl_loss"], color='black', linestyle='--', linewidth=1, label=f'Average: {round(test_metrics["avg_kl_loss"],2)}')
+ax2.legend(frameon = False, ncol=2)
+
+# plot total loss
+ax3 = sns.lineplot(
+    testdf,x=testdf["iteration"], y=testdf["Test total Loss"],
+    lw = 2, color = "royalblue", alpha = 0.7, label="Total Error",
+    marker = "o",ax=axes[2],markerfacecolor="black")
+
+ax3.set_ylim([
+    np.min(testdf["Test total Loss"])*0.99,
+    np.max(testdf["Test total Loss"])*1.01
+])
+
+
+ax3.axhline(y=test_metrics["avg_total_loss"], color='black', linestyle='--', linewidth=1, label=f'Average: {round(test_metrics["avg_total_loss"],2)}')
+ax3.legend(frameon = False, ncol=2)
+
+
+ax1.set_xlabel("Iterations")
+plt.suptitle(f"Test Set Metrics\n{model_id}")
+plt.show()
+
+
+
+###########
+
+# Reconstructions of the test set 
+
+# get a random tesnor from the test_iter dictionary, where the Xreconstrcuted are stored
+i = np.random.randint(len(test_iter_dict["x_orig tensors"]))
+
+# the tensors are not in the computation graph but the still need to be transfered to the cpu and then converted to numpy 
+len(test_iter_dict["x_orig tensors"])
+xorig, xrec, xmask = test_iter_dict["x_orig tensors"][i].cpu().numpy(), test_iter_dict["x_mu tensors"][i].cpu().numpy(), test_iter_dict["masks"][i].cpu().numpy()
+xdif = xorig-xrec
+
+# create the plot 
+fig, axes = plt.subplots(1,3,figsize=(18,6),sharey=True)
+
+ax1 = sns.heatmap(xorig, cmap="viridis",vmin=0,vmax=1,
+                  mask=xmask,xticklabels=False, ax=axes[0],
+                  cbar = False)
+
+ax2 = sns.heatmap(xrec, cmap="viridis",vmin=0,vmax=1,
+                  mask=xmask,xticklabels=False,ax=axes[1],
+                  cbar_ax=fig.add_axes([.17, 0, .4, .04]),
+                  cbar_kws={"orientation": "horizontal"})
+
+
+ax3 = sns.heatmap(np.abs(xdif), cmap="Reds",
+                  mask=xmask,xticklabels=False, ax=axes[2])
+ax1.set_title("Original matrix", fontsize = 14, y=1.05)
+ax2.set_title("Reconstructed matrix", fontsize = 14, y=1.05)
+ax3.set_title("Absolute difference", fontsize = 14, y=1.05)
+
+fig.suptitle(f"Protein Matrix Reconstruction of Test Set Batch:\n {model_id}",
+             y=1.1,x=.54,
+             fontsize=16)
+plt.savefig(model_path + "\\matrix_reconstruction.png", dpi=600, bbox_inches="tight",transparent=True)
+
+# save figures
+plt.show()

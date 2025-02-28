@@ -152,6 +152,16 @@ class VAE(nn.Module):
         return z_mu, z_logvar
     
 
+    def init_weights(self):
+        """Apply Kaiming init to layers of encoder and decoder.
+        """
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                # condiotional for linear layers of the module generator 
+                nn.init.kaiming_uniform_(m.weight, nonlinearity='leaky_relu')
+                if m.bias is not None:
+                    m.bias.data.fill_(0.0)
+
     def get_latent_variables(self, x, detach = False):
         """
         If detach = True the latent variables are not part of the 
@@ -167,7 +177,7 @@ class VAE(nn.Module):
 
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
-        return mu + torch.randn_like(std) * std # what this does ?
+        return mu + torch.randn_like(std) * std #samples from the latent space 
     
 
     def decode(self, z):

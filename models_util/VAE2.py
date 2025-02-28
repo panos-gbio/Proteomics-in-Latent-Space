@@ -137,7 +137,7 @@ class VAE(nn.Module):
             nn.Dropout(0.2),
             nn.BatchNorm1d(self.hidden_dim_2),
             nn.LeakyReLU(.1),
-            nn.Linear(self.latent_dim_2, self.hidden_dim_1),
+            nn.Linear(self.hidden_dim_2, self.hidden_dim_1),
             nn.Dropout(0.2),
             nn.BatchNorm1d(self.hidden_dim_1),
             nn.LeakyReLU(.1))
