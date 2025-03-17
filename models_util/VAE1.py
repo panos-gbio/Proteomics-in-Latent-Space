@@ -53,7 +53,7 @@ class VAE(nn.Module):
                  latent_dim: int,
                  hidden_layer : bool = False,
                  hidden_dim: int = None,
-                 sigmoid = True):
+                 output_activ = None):
         """
         Parameters:
         ------------------
@@ -67,14 +67,14 @@ class VAE(nn.Module):
         hidden_dim : int
             Number of neurons in the hidden layer (e.g., 50), if there is a hidden
             layer. Default value is None 
-        sigmoid : bool
-            If True, applies a Sigmoid activation to the decoder output. Usefull
-            when data is scaled to (0,1). Not recommended for raw measurements. 
+        output_activ : nn.Module
+            If None, does not apply an activation function to the decoder output. Usefull
+            when data is scaled to (0,1) or (-1,1). Not recommended for raw measurements. 
         
         Information
         ------------------
         The VAE has maximum one hidden layer with LeakyReLu activation function
-        to the encoder. The decoder is either linear or a sigmoid activation function
+        to the encoder. The decoder is either linear or an activation function
         is applied if scaled data is used. 
         For Regularlization I used dropout rate equal to 0.2
         I added the choice of a model without hidden layer and with a linear 
@@ -87,7 +87,7 @@ class VAE(nn.Module):
         self.hidden_layer = hidden_layer
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
-        self.sigmoid = sigmoid
+        self.output_activ = output_activ
 
         # the encoder module
         if hidden_layer == False: # this is linear transformation 
@@ -115,8 +115,8 @@ class VAE(nn.Module):
             # one linear Layer the latent Space: z_mu and z_logvar
             nn.Linear(latent_dim, n_features)]
                       
-            if sigmoid == True:
-                decoder_list.append(nn.Sigmoid())
+            if self.output_activ:
+                decoder_list.append(self.output_activ)
             
             self.head_mu = nn.Sequential(*decoder_list)
             self.head_logvar = nn.Linear(latent_dim, n_features)
@@ -134,8 +134,8 @@ class VAE(nn.Module):
 
             # Decoder output separated in two heads: x_mu and x_logvar 
             head_mu_list = [nn.Linear(self.hidden_dim, self.n_features)]
-            if sigmoid == True:
-                head_mu_list.append(nn.Sigmoid())
+            if self.output_activ:
+                head_mu_list.append(self.output_activ)
             
             # unpack the n x_mu variables
             self.head_mu = nn.Sequential(*head_mu_list)

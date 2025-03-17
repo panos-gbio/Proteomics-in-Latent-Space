@@ -1,34 +1,43 @@
 # Project Structure 
 ```
-proteomics_in_latent_space/                 # 🔹 Project Root (Main Working Directory)
+proteomics_in_latent_space/                 # Project Root (Main Working Directory)
 │
-├── running_script.py                       # 🔹 Main script to train the models 
+├── 00_hyperparam_optimization.ipynb        # Script to optimze hyperparam 
+├── 01_run_model_SCBC.ipynb                 # Script to run the subcell proteomics data 
+├── 02_run_model_ABMS.ipynb                 # Script to run the total-cell ptoteomics data
+├── 03_ppi_predictions.ipynb                # Script to the ML pipeline for ppi predictions 
 │
-├── models_util/                            # 🔹 Package for all python modules 
+├── models_util/                            # Package for all python modules 
 │   ├── __init__.py                        
-│   ├── configs.py                           # ⚙️  Handles seeds  & device configuration
-│   ├── cost_functions.py                   # 📊  VAE cost functions 
-│   ├── custom_dataset.py                   # 🗂️  Handles dataset loading in pytorch
-│   ├── utility_functions.py                # ⚙️  Useful functions VAE training  
-│   ├── VAE1.py                             #      Variational autoencoder 
+│   ├── configs.py                          #  Handles seeds  & device configuration
+│   ├── cost_functions.py                   #  VAE cost functions 
+│   ├── custom_dataset.py                   #  Handles dataset loading in pytorch
+│   ├── utility_functions.py                #  Usefull functions for the DL part of the project 
+|   ├── ml_utility_funct.py                 #  Useful functions for ML part of the project  
+│   ├── VAE1.py                             #  Variational autoencoder model
+│   ├── VAE2.py                             #  VAE with deeper architecture 
 │
-├── r_util/                                 #  R scripts & utilities for analysis 
+├── r_util/                                 #  R scripts for analysis & figures 
 │   ├──                                     # 
 │   ├──                                     #
 │
-├── data/                                   # 🔹 Folder to store datasets
+├── data/                                   #  Folder to store datasets
 │   ├── processed/
-│       ├── prot_abms_norm.txt              # 📜 Total Cell proteomics
-│       ├── protein_quant_merged.txt        # 📜 Subcellular proteomics   
+│       ├── prot_abms_norm.txt              # Total Cell proteomics
+│       ├── protein_quant_merged.txt        # Subcellular proteomics   
 │   ├── raw/
 │       ├──                        
 │
-├── outputs/                                # 📁 Stores trained models & logs
-│   ├── trained_model.pth                   # 🎯 Saved PyTorch model checkpoint
-│   ├── training_logs.txt                    # 📄 Training logs & results
+├── models/                                 # Stores trained models & related figures
+│   ├── model_name/                         # Example
+│       ├── model_name.pth                  # Model checkpoint saved as pth
+│       ├── example_figure_1.jpg            # Figure from the running script 
+│                
+├── figures/                                # Final figures from specified models and analysis 
 │
-├── requirements.txt                        # Dependencies
-
+├── enviroment.yml                          # Dependencies for python enviroment
+├── notes.md                                # 
+├── .gitignore                              # 
 ```
 
 

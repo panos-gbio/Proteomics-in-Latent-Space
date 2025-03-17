@@ -791,11 +791,13 @@ def plot_test_losscurves(
 def get_matrix_rec(
         test_iter_dict,
         model_id,
-        model_path
+        model_path,
+        v_max = 1,
+        v_min = 0
 ):
     # Reconstructions of the test set 
 
-        # get a random tesnor from the test_iter dictionary, where the Xreconstrcuted are stored
+        # get a random tensor from the test_iter dictionary, where the Xreconstrcuted are stored
         i = np.random.randint(len(test_iter_dict["x_orig tensors"]))
 
         # the tensors are not in the computation graph but the still need to be transfered to the cpu and then converted to numpy 
@@ -806,11 +808,11 @@ def get_matrix_rec(
         # create the plot 
         fig, axes = plt.subplots(1,3,figsize=(18,6),sharey=True)
 
-        ax1 = sns.heatmap(xorig, cmap="viridis",vmin=0,vmax=1,
+        ax1 = sns.heatmap(xorig, cmap="viridis",vmin=v_min,vmax=v_max,
                         mask=xmask,xticklabels=False, ax=axes[0],
                         cbar = False)
 
-        ax2 = sns.heatmap(xrec, cmap="viridis",vmin=0,vmax=1,
+        ax2 = sns.heatmap(xrec, cmap="viridis",vmin=v_min,vmax=v_max,
                         mask=xmask,xticklabels=False,ax=axes[1],
                         cbar_ax=fig.add_axes([.17, 0, .4, .04]),
                         cbar_kws={"orientation": "horizontal"})
