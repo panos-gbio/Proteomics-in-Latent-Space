@@ -4,6 +4,7 @@
 # More details can be found at: https://github.com/RasmussenLab/pimms
 # The Cost function is based on the ELBO and I used bits per dim for KL-divergence
 # reguralizaton. https://github.com/ronaldiscool/VAETutorial
+# corrections for the cost function based on Continuous - Bernoulli MLE approach for scaled (0,1) data.
 
 
 # import libraries 
@@ -17,6 +18,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 import torch.optim as optim
+
 
 # this for the custom Dataset 
 from torch.utils.data import Dataset
@@ -76,10 +78,15 @@ class VAE(nn.Module):
         The VAE has maximum one hidden layer with LeakyReLu activation function
         to the encoder. The decoder is either linear or an activation function
         is applied if scaled data is used. 
-        For Regularlization I used dropout rate equal to 0.2
+        For Regularlization I used dropout rate equal to 0.2, got good results.
         I added the choice of a model without hidden layer and with a linear 
-        transformation if the data  is unscaled and raw values might be used. 
+        transformation if the data is unscaled and raw values might be used.
+        The x_mu (averages) output of the decoder can be transformed by activation functions or
+        not. The log_var (variances) will not be transformed and are extracted from
+        a separate head of the decoder's architecture.
+
         """ 
+
         super().__init__()
 
         # Load the parameters 

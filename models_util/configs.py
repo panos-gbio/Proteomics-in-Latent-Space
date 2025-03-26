@@ -49,6 +49,7 @@ def set_seed(seed=123):
     random.seed(seed)              # Python random module
     np.random.seed(seed)           # NumPy random
     torch.manual_seed(seed)        # PyTorch CPU
+                                   # seed dataloader
 
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)  # GPUs, if available 

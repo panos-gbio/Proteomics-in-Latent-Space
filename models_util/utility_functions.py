@@ -285,6 +285,12 @@ def plot_training_loss_sp(ax, minibatch_losses, num_epochs, averaging_iterations
             np.min(minibatch_losses[num_losses:])*0.99,
             np.max(minibatch_losses[num_losses:])*1.01
         ])
+    
+    elif (np.min(minibatch_losses) >0) and (np.max(minibatch_losses) < 5):
+                ax.set_ylim([
+            np.min(minibatch_losses[num_losses:]),
+            np.max(minibatch_losses[num_losses:])
+        ])
 
     # Plot running average of the loss
     running_avg = np.convolve(minibatch_losses,
@@ -443,23 +449,70 @@ def test_set_analysis(
         test_loader,
         loss_fun,
         freebits,
-        model_id
+        model_id,
+        active_func = True
         ):
+
+        """
+        Evaluates the model on the test set, computes losses, and stores per-batch metrics.
+        
+        If an activation function is provided via `active_func`, it is applied to the decoder's
+        output (x_mu) for downstream analysis. Otherwise, a default sigmoid activation is applied.
+        
+        Parameters:
+        -----------
+        model : torch.nn.Module
+            The model to evaluate.
+        test_loader : DataLoader
+            An iterable over the test dataset returning (tbatch, tmask, tidx).
+        loss_fun : function
+            The Loss function that was used during training to compute the KL and Reconstruction error terms.
+        freebits : float
+            The freebits parameter for the KL divergence regularization.
+        model_id : str or int
+            Identifier for the model.
+        active_func : bool, optional
+            Informs whether the decoder output is transformed  with an activation function.
+            Default is True.
+            If false, a sigmoid is used to transform the decoder output, x_mu. 
+        
+        Returns:
+        --------
+        test_iter_dict : dict
+            Dictionary containing metrics and tensors for each test batch.
+        test_metrics : dict
+            Dictionary summarizing average losses over the test set.
+        """
+
 
         # use the trained model and its parameters 
         print(f"Using this model {model_id}")
 
         # the original and reconstructed tensors will be usefull for observations 
-        test_iter_dict = {
-        "iteration": [],
-        "Test total Loss": [],
-        "Test KL Loss": [], 
-        "Test Rec Loss": [],
-        "Test batch index": [],
-        "x_orig tensors": [],
-        "x_mu tensors": [],
-        "masks": []
-        }
+        if active_func:
+            print("The decoder output is transformed with an activation function, so reoconstructions are scaled.")
+            test_iter_dict = {
+            "iteration": [],
+            "Test total Loss": [],
+            "Test KL Loss": [], 
+            "Test Rec Loss": [],
+            "Test batch index": [],
+            "x_orig tensors": [],
+            "x_mu tensors": [],
+            "masks": []
+            }
+        else:
+            print("The decoder output is is not transformed to [0,1], so for downstream analysis a sigmoid will be applied to the reconstruction log-propabilities.")
+            test_iter_dict = {
+            "iteration": [],
+            "Test total Loss": [],
+            "Test KL Loss": [], 
+            "Test Rec Loss": [],
+            "Test batch index": [],
+            "x_orig tensors": [],
+            "x_mu tensors": [],
+            "masks": []
+            }
         test_metrics = {
                 "model_id": f"{model_id}",
                 "bits": freebits,
@@ -487,11 +540,18 @@ def test_set_analysis(
                         test_iter_dict["Test total Loss"].append(loss.detach().item())
                         test_iter_dict["Test KL Loss"].append(lst[-1])
                         test_iter_dict["Test Rec Loss"].append(lst[-2])
+
                         # list of tensors with sample indices and the samples original, reconstructed 
                         test_iter_dict["Test batch index"].append(tidx.detach()) 
                         test_iter_dict["x_orig tensors"].append(tbatch.detach())
-                        test_iter_dict["x_mu tensors"].append(x_mu.detach())
                         test_iter_dict["masks"].append(tmask.detach())
+
+                        # for the x_mu tensor (reconstruction of the VAE) - we condition based on the activation function
+                        if active_func:
+                             test_iter_dict["x_mu tensors"].append(x_mu.detach())
+                        else:
+                             test_iter_dict["x_mu tensors"].append(torch.sigmoid(x_mu).detach())
+
                         
                         # update batch
                         _iter += 1
@@ -628,6 +688,7 @@ def train_val_loop_v2(model: nn.Module,
                         
                 # Optional gradient clipping
                 # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=norm)
+                
                 optimizer.step()
 
                 # update the batch dictionary 
@@ -714,6 +775,210 @@ def train_val_loop_v2(model: nn.Module,
     return batch_dict,epoch_dict,hyperparam_str
 
 
+def train_val_loop_v3(model: nn.Module,
+                   loss_fun: Callable,
+                   train_loader: torch.utils.data.DataLoader,
+                   val_loader: torch.utils.data.DataLoader,
+                   model_name = "",
+                   model_path = "",
+                   epoch=20,
+                   patience = 5,
+                   learn_r=0.005,
+                   freebits=0.1,
+                   batch_size=128,
+                   norm = 0):
+
+
+    # initilize epoch run / checkpoint and patience
+    checkpoint = 0
+    pa_tience = patience
+    best_loss = 2
+    lrswitch = False  
+
+    # set optimizer and learning rate
+    optimizer = optim.Adam(model.parameters(), lr=learn_r)
+
+    # create a string for the hyperparameters 
+    hyperparam_str = f"ep{checkpoint}_norm{norm}_bits{freebits}_bs{batch_size}_lr{optimizer.param_groups[0]["lr"]}"
+
+    # check for model name
+    if model_name == "":
+        raise RuntimeError("Insert a model name")
+    
+    # where to save the model
+    if model_path == "":
+        raise RuntimeError("Write a path directory to save the model")
+    
+    # Storage
+    # for each batch/iteration
+    batch_dict = {
+        "iteration": [],
+        "Train total Loss": [],
+        "Train KL Loss": [], 
+        "Train Rec Loss": []
+        }
+
+    # for each epoch
+    epoch_dict = {
+        "epoch": [],
+        "Train total Loss": [],
+        "Train KL Loss": [], 
+        "Train Rec Loss": [],
+        "Val total Loss": [],
+        "Val KL Loss": [],
+        "Val Rec Loss": []
+        }
+
+
+    for epoch in tqdm(range(epoch+1)):
+        
+        
+        # initialize the loss metrics at epoch zero
+        if epoch == 0:
+            print(f"Performing pre-training evaluation on the model in epoch {epoch}")
+            val_loss, val_kl, val_rl = 0,0,0
+            model.eval()
+            with torch.inference_mode(): # it doesnt update parameters 
+                lst = []
+                for val_batch, t_mask, tidx in val_loader:
+                    x_mu, x_logvar, z_mu, z_logvar = model(val_batch)
+                    loss = loss_fun(val_batch, x_mu, x_logvar, z_mu, z_logvar,lst,mask=t_mask,freebits=freebits)
+                    val_loss += loss.detach().item()
+                    val_kl += lst[-1]
+                    val_rl += lst[-2]
+                
+                val_loss = val_loss/len(val_loader)
+                val_kl = val_kl/len(val_loader)
+                val_rl = val_rl/len(val_loader)
+                
+                epoch_dict["epoch"].append(epoch)
+                epoch_dict["Train total Loss"].append(val_loss)
+                epoch_dict["Train KL Loss"].append(val_kl)
+                epoch_dict["Train Rec Loss"].append(val_rl)
+                epoch_dict["Val total Loss"].append(val_loss)
+                epoch_dict["Val KL Loss"].append(val_kl)
+                epoch_dict["Val Rec Loss"].append(val_rl)
+            
+            print(f"\nVal loss: {val_loss:.3f}| Val KL: {val_kl} | Val Rec: {val_rl:.3f}\n")
+        
+        # begin training the model from epoch 1 and iteration 0 
+        else:
+            # print(f"Epoch {epoch}\n--------------------")
+            train_loss, train_kl, train_rl = 0,0,0
+            lst = [] # this list stores the averaged losses/batch that are computed from the loss
+            _iter = 0
+            # print("Iter initialized before loop")			
+            for batch, (xbatch, xmask, xidx) in enumerate(train_loader):
+                model.train()
+                # device
+                xbatch, xmask = xbatch.to(device), xmask.to(device)
+
+                #
+                optimizer.zero_grad()
+
+                x_mu, x_logvar, z_mu, z_logvar = model(xbatch)
+
+                loss = loss_fun(xbatch, x_mu, x_logvar, z_mu, z_logvar,lst,mask=xmask,freebits=freebits)
+                train_loss += loss.detach().item()
+                train_kl += lst[-1]
+                train_rl += lst[-2]
+
+                batch_loss = loss.detach().item()
+                batch_kl = lst[-1]
+                batch_rl = lst[-2]
+
+                loss.backward()
+                        
+                # Optional gradient clipping
+                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=norm)
+                
+                optimizer.step()
+
+                # update the batch dictionary 
+                batch_dict["iteration"].append(_iter)
+                batch_dict["Train total Loss"].append(batch_loss)
+                batch_dict["Train KL Loss"].append(batch_kl)
+                batch_dict["Train Rec Loss"].append(batch_rl)
+
+                _iter +=1 
+
+                # print every round of 10 batches the losses - smooths the results 
+                # if batch % 10 == 0:
+                #     print(f"Iter {batch} and a total {batch*batch_size}/{len(train_loader.dataset)} proteins have passed.")
+                #     print(f"Current Loss: {train_loss/(batch+1)} | KL Loss: {train_kl/(batch+1)}| Rec Loss: {train_rl/(batch+1)}")
+
+
+            # calculate per epoch the metrics - divide by number of batches 
+            train_loss = train_loss/len(train_loader)
+            train_kl = train_kl/len(train_loader)
+            train_rl = train_rl/len(train_loader)
+            
+            # add them to the dictionary 
+            epoch_dict["epoch"].append(epoch)
+            epoch_dict["Train total Loss"].append(train_loss)
+            epoch_dict["Train KL Loss"].append(train_kl)
+            epoch_dict["Train Rec Loss"].append(train_rl)
+            
+
+            # pass the validation set to the VAE 
+            val_loss, val_kl, val_rl = 0,0,0
+            model.eval()
+            with torch.inference_mode(): # it doesnt update parameters based on gradients 
+                lst = []
+                for val_batch, t_mask, tidx in val_loader:
+
+                    x_mu, x_logvar, z_mu, z_logvar = model(val_batch)
+                    loss = loss_fun(val_batch, x_mu, x_logvar, z_mu, z_logvar,lst,mask=t_mask,freebits=freebits)
+                    val_loss += loss.detach().item()
+                    val_kl += lst[-1]
+                    val_rl += lst[-2]
+                
+                # divide by all the batches of val set to get epoch metrics 
+                val_loss = val_loss/len(val_loader)
+                val_kl = val_kl/len(val_loader)
+                val_rl = val_rl/len(val_loader)
+
+                epoch_dict["Val total Loss"].append(val_loss)
+                epoch_dict["Val KL Loss"].append(val_kl)
+                epoch_dict["Val Rec Loss"].append(val_rl)
+
+            ## Print out what's happening
+            # print(f"Train loss: {train_loss:.3f}|Train Rec: {train_rl:.3f} | Val loss: {val_loss:.3f}, Val Rec: {val_rl:.3f}\n")
+            
+            # check if the val loss is smaller than the best loss and check for early stopping 
+            if (epoch > 40) & (val_rl < best_loss):
+                best_loss = val_rl
+                checkpoint = epoch
+                hyperparam_str = f"ep{checkpoint}_norm{norm}_bits{freebits}_bs{batch_size}_lr{optimizer.param_groups[0]["lr"]}"
+                final_name = model_name + "_" + hyperparam_str
+                final_path = model_path + f"\\{final_name}.pth"
+                torch.save(model.state_dict(), final_path) # save the model on the checkpoint epoch 
+                # if exceed patient reduce learning rate
+            elif (lrswitch is False) & (epoch > 40) & (epoch - checkpoint > pa_tience):
+                print(f"Patience exceeded at {epoch} with last checkpoint saved at {checkpoint}")
+                optimizer.param_groups[0]["lr"] = 0.001
+                print(f"changed learning rate to {optimizer.param_groups[0]["lr"]}")
+                checkpoint = epoch
+                pa_tience = 10
+                lrswitch = True
+                # if reduced learning rate exceeds patience break the loop 
+            elif (lrswitch is True) & (epoch > 40) & (epoch - checkpoint > pa_tience):
+                print(f"Early stopping at epoch {epoch} with last checkpoint saved at {checkpoint}")
+                break
+    
+    # if we run at low epochs then probably patience is not going to be exceeded
+    if lrswitch is False:
+        hyperparam_str = f"ep{epoch}_norm{norm}_bits{freebits}_bs{batch_size}_lr{optimizer.param_groups[0]["lr"]}"
+    
+    # save the model after training to the designated path
+    # torch.save(model.state_dict(), model_path)
+    print(f"Model saved at: {model_path}")
+
+    # two dictionaries and the hyperparamstring grouped in a tuple     
+    return batch_dict,epoch_dict,hyperparam_str
+
+
+
 def plot_test_losscurves(
         test_iter_dict,
         test_metrics,
@@ -792,8 +1057,8 @@ def get_matrix_rec(
         test_iter_dict,
         model_id,
         model_path,
-        v_max = 1,
-        v_min = 0
+        v_max = None,
+        v_min = None
 ):
     # Reconstructions of the test set 
 
@@ -805,6 +1070,10 @@ def get_matrix_rec(
         xorig, xrec, xmask = test_iter_dict["x_orig tensors"][i].cpu().numpy(), test_iter_dict["x_mu tensors"][i].cpu().numpy(), test_iter_dict["masks"][i].cpu().numpy()
         xdif = xorig-xrec
 
+        if v_max and v_min is None:
+             v_max = np.max(xorig)
+             v_min = np.min(xorig)
+             
         # create the plot 
         fig, axes = plt.subplots(1,3,figsize=(18,6),sharey=True)
 
