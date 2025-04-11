@@ -2,11 +2,21 @@
 data/*
 figures/*
 models/*
+notes_dev/*
 
-# make exception for the README file
+# make exception for the README file in each directory 
 !data/raw/README.md
-!data/processed/README.md 
-!figures/README.md
-!models/README.md
+!data/processed/README.md
 
-notes.md
+!data/features_protein/README.md
+!data/features_sim/README.md
+!data/features_proteoforms/README.md
+
+!data/features/README.md
+
+!notes_dev/README.md
+
+
+!figures/README.md
+!figures/selected/*
+!models/README.md

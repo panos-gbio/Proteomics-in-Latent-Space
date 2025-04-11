@@ -480,3 +480,180 @@ plt.savefig(model_path + "\\matrix_reconstruction.png", dpi=600, bbox_inches="ti
 
 # save figures
 plt.show()
+
+
+
+
+# Train - Val loop for the models
+def train_val_loop(model: nn.Module,
+                   loss_fun: Callable,
+                   train_loader: torch.utils.data.DataLoader,
+                   val_loader: torch.utils.data.DataLoader,
+                   model_name = "",
+                   model_path = "",
+                   epoch=20,
+                   learn_r=0.005,
+                   freebits=0.1,
+                   batch_size=128,
+                   norm = 0):
+
+
+
+    # set optimizer and learning rate
+    optimizer = optim.Adam(model.parameters(), lr=learn_r)
+
+    # create a string for the hyperparameters 
+    hyperparam_str = f"ep{epoch}_norm{norm}_bits{freebits}_bs{batch_size}_lr{optimizer.param_groups[0]["lr"]}"
+
+    # check for model name
+    if model_name == "":
+        raise RuntimeError("Insert a model name")
+    # add model name to the hyperparam_str
+    final_name = model_name + "_" + hyperparam_str
+
+    # where to save the model
+    if model_path == "":
+        raise RuntimeError("Write a path to save the model")
+    model_path = model_path + f"\\{final_name}.pth"
+    
+    # Storage
+    # for each batch/iteration
+    batch_dict = {
+        "iteration": [],
+        "Train total Loss": [],
+        "Train KL Loss": [], 
+        "Train Rec Loss": []
+        }
+
+    # for each epoch
+    epoch_dict = {
+        "epoch": [],
+        "Train total Loss": [],
+        "Train KL Loss": [], 
+        "Train Rec Loss": [],
+        "Val total Loss": [],
+        "Val KL Loss": [],
+        "Val Rec Loss": []
+        }
+
+
+    for epoch in tqdm(range(epoch+1)):
+        
+        
+        # initialize the loss metrics at epoch zero
+        if epoch == 0:
+            print(f"Performing pre-training evaluation on the model in epoch {epoch}")
+            val_loss, val_kl, val_rl = 0,0,0
+            model.eval()
+            with torch.inference_mode(): # it doesnt update parameters 
+                lst = []
+                for val_batch, t_mask, tidx in val_loader:
+                    x_mu, x_logvar, z_mu, z_logvar = model(val_batch)
+                    loss = loss_fun(val_batch, x_mu, x_logvar, z_mu, z_logvar,lst,mask=t_mask,freebits=freebits)
+                    val_loss += loss.detach().item()
+                    val_kl += lst[-1]
+                    val_rl += lst[-2]
+                
+                val_loss = val_loss/len(val_loader)
+                val_kl = val_kl/len(val_loader)
+                val_rl = val_rl/len(val_loader)
+                
+                epoch_dict["epoch"].append(epoch)
+                epoch_dict["Train total Loss"].append(val_loss)
+                epoch_dict["Train KL Loss"].append(val_kl)
+                epoch_dict["Train Rec Loss"].append(val_rl)
+                epoch_dict["Val total Loss"].append(val_loss)
+                epoch_dict["Val KL Loss"].append(val_kl)
+                epoch_dict["Val Rec Loss"].append(val_rl)
+            
+            print(f"\nVal loss: {val_loss:.3f}| Val KL: {val_kl} | Val Rec: {val_rl:.3f}\n")
+        
+        # begin training the model from iteration 0 and after epoch 0 
+        else:
+            print(f"Epoch {epoch}\n--------------------")
+            train_loss, train_kl, train_rl = 0,0,0
+            lst = [] # this list stores the averaged losses/batch that are computed from the loss
+            _iter = 0
+            # print("Iter initialized before loop")			
+            for batch, (xbatch, xmask, xidx) in enumerate(train_loader):
+                model.train()
+                # device
+                xbatch, xmask = xbatch.to(device), xmask.to(device)
+
+                #
+                optimizer.zero_grad()
+
+                x_mu, x_logvar, z_mu, z_logvar = model(xbatch)
+
+                loss = loss_fun(xbatch, x_mu, x_logvar, z_mu, z_logvar,lst,mask=xmask,freebits=freebits)
+                train_loss += loss.detach().item()
+                train_kl += lst[-1]
+                train_rl += lst[-2]
+
+                batch_loss = loss.detach().item()
+                batch_kl = lst[-1]
+                batch_rl = lst[-2]
+
+                loss.backward()
+                        
+                # Optional gradient clipping
+                # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=norm)
+                optimizer.step()
+
+                # update the batch dictionary 
+                batch_dict["iteration"].append(_iter)
+                batch_dict["Train total Loss"].append(batch_loss)
+                batch_dict["Train KL Loss"].append(batch_kl)
+                batch_dict["Train Rec Loss"].append(batch_rl)
+
+                _iter +=1 
+
+                # print every round of 10 batches the losses - smooths the results 
+                # if batch % 10 == 0:
+                #     print(f"Iter {batch} and a total {batch*batch_size}/{len(train_loader.dataset)} proteins have passed.")
+                #     print(f"Current Loss: {train_loss/(batch+1)} | KL Loss: {train_kl/(batch+1)}| Rec Loss: {train_rl/(batch+1)}")
+
+
+            # calculate per epoch the metrics - divide by number of batches 
+            train_loss = train_loss/len(train_loader)
+            train_kl = train_kl/len(train_loader)
+            train_rl = train_rl/len(train_loader)
+            
+            # add them to the dictionary 
+            epoch_dict["epoch"].append(epoch)
+            epoch_dict["Train total Loss"].append(train_loss)
+            epoch_dict["Train KL Loss"].append(train_kl)
+            epoch_dict["Train Rec Loss"].append(train_rl)
+            
+
+            # pass the validation set to the VAE 
+            val_loss, val_kl, val_rl = 0,0,0
+            model.eval()
+            with torch.inference_mode(): # it doesnt update parameters based on gradients 
+                lst = []
+                for val_batch, t_mask, tidx in val_loader:
+
+                    x_mu, x_logvar, z_mu, z_logvar = model(val_batch)
+                    loss = loss_fun(val_batch, x_mu, x_logvar, z_mu, z_logvar,lst,mask=t_mask,freebits=freebits)
+                    val_loss += loss.detach().item()
+                    val_kl += lst[-1]
+                    val_rl += lst[-2]
+                
+                # divide by all the batches of val set to get epoch metrics 
+                val_loss = val_loss/len(val_loader)
+                val_kl = val_kl/len(val_loader)
+                val_rl = val_rl/len(val_loader)
+
+                epoch_dict["Val total Loss"].append(val_loss)
+                epoch_dict["Val KL Loss"].append(val_kl)
+                epoch_dict["Val Rec Loss"].append(val_rl)
+
+            ## Print out what's happening
+            print(f"Train loss: {train_loss:.3f}|Train Rec: {train_rl:.3f} | Val loss: {val_loss:.3f}, Val Rec: {val_rl:.3f}\n")
+
+    # save the model after training to the designated path
+    torch.save(model.state_dict(), model_path)
+    print(f"Model saved at: {model_path}")
+
+    # two dictionaries and the hyperparamstring grouped in a tuple     
+    return batch_dict,epoch_dict,hyperparam_str
