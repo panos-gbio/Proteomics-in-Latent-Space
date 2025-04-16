@@ -1,0 +1,763 @@
+---
+title: "Correlation Networks"
+author: "Ioannis Siavelis, Georgios Panos"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapse: false
+    theme: "readable"
+---
+<!-- Lab creator: Ioannis Siavelis -->
+```{r setup, include=FALSE}
+# Document configurations and paths 
+data_path <- "../../data/raw_ppi/"
+save_path <- "../../data/processed_ppi/"
+figure_path <- "../../figures/ppi/"
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+knitr::opts_knit$set(root.dir = getwd())
+
+options(max.print=200)
+data_path
+```
+
+# Libraries
+Load the libraries we are gonna use 
+```{r load libraries}
+
+library(biomaRt)
+library(openxlsx)
+library(igraph)
+library(ggplot2)
+library(caret)
+library(ROCR)
+library(rgexf)
+library(Hmisc)
+library(patchwork)
+library(VennDiagram)
+library(HGNChelper)
+library(tidyr)
+library(dplyr)
+
+```
+# Protein complex Databases 
+
+## 1. Analyze Compleat Data
+In this first part, i extract the ENSEMBL IDs of genes by using 3 functions:
+*strsplit(...,"dilimiter")* -> Input is a column vector, split values in that column into a list.
+*unlist()* -> converts list into a vector
+*unique()* -> extract unique elements
+
+```{r Load Compleat Data}
+## COMPLEAT protein complex dataset
+compleat <- read.xlsx(paste0(data_path,"COMPLEAT_13059_2016_912_MOESM2_ESM.xlsx"))
+# get unique gene IDs that belong to complexes 
+compleat_genes <- unique(unlist(strsplit(compleat$`Member.identifiers.(human.Ensembl.gene)`, ' ')))
+```
+
+
+### 1.1 Relation table: Ensemble ID <-> Gene Name 
+
+I use the BioMart package to extract Ensemble IDs and Gene symbols (external_gene_names). I store the result into a new dataframe called genes_dt.
+
+```{r Ensebmle - Gene ID df }
+# Connect to BioMart and create an object bm
+bm <- useMart(biomart="ensembl", dataset="hsapiens_gene_ensembl")
+
+# Create a df with all the attributes 
+bm_attrib <- listAttributes(bm)
+
+# query the database for a relation and store it in a df
+genes_dt <- getBM(attributes = c('ensembl_gene_id', 'external_gene_name'),
+                  filters = 'ensembl_gene_id', 
+                  values = compleat_genes, 
+                  mart = bm)
+
+# Filter out relations in the df that have an empty value in the column. Remove rows with empty gene symbol. From 1989 columns -> 1985 columns
+genes_dt <- genes_dt[genes_dt$external_gene_name != '', ]
+
+```
+
+
+### 1.2 Create a list of Complex - gene Names 
+After I create the Ensemble - Gene ID relation df, I will use it to convert the names of the compleat dataframe.
+
+*lapply* function can be used for each row of the dataframe. To convert the complex member's ID to gene names.
+
+Output is a list where we name the complex and each constituents 
+
+Each index "ind" is a row of the 
+```{r Ensebmle to gene ID}
+compleat_genes <- lapply(1:nrow(compleat), function(ind) {
+  
+  # For each row go to the complex members column and store value -> list
+  res = compleat[ind, 'Member.identifiers.(human.Ensembl.gene)']
+  
+  # Break the list of members and make it a vector 
+  res = unique(unlist(strsplit(res, ' ')))
+  
+  # Match ensembl ID from res to Gene names from biomart dataframe.
+  # Takes index vector and applies it to the gene_dt df 
+  res = genes_dt$external_gene_name[match(res, genes_dt$ensembl_gene_id)]
+  
+  # Filter out NA out of the 
+  res = res[!is.na(res)]
+  res = unique(res)
+  
+})
+
+```
+
+
+### 1.3 Changes to the list of complexes
+The List of complexes from COMPLEAT is not ready yet. We need to extract the names of the complexes. Also we want to exclude complexes with more than 20 constituents. We dont want to train our data with complexes that have extreme sizes. 
+
+```{r Name and exclude size>20 }
+# Name the list of complexes 
+names(compleat_genes) <- compleat$Complex.Name
+
+# It is a list, and i want the size of each complex so, break each part 
+complex_size <- unlist(lapply(compleat_genes, length))
+
+# Exclude complex size >20 from the list 
+complex_size <- complex_size[complex_size <= 20]
+compleat_genes <- compleat_genes[names(complex_size)]
+
+# create protein pairs from the protein complex list  
+compleat_pairs <- do.call(rbind, lapply(1:length(compleat_genes), function(i) {
+  
+  # print(i)
+  
+  complex_i <- compleat_genes[i]
+  
+  protein_pairs <- as.data.frame(t(combn(unlist(complex_i),2)))
+  protein_pairs$complex <- names(complex_i)
+  
+  return(protein_pairs)
+  
+}))
+```
+
+To remove the duplicates after generating protein pairs from the database:
+
+First we sort each pair, so if we have duplication in the form of A-B and B-A, we take the result as A-B, A-B.
+
+For the duplication in *compleat_pairs* we concatenated the first two columns into a single string containing the pairs. Then we searched duplicate strings in the character vector. Using negation we created !duplicated -> Boolean vector. We sub-setted the dataframe for duplicated genes with the Boolean.
+
+```{r remove duplicates}
+# Sort pair, so the same pairs might be represented the same way in the two columns 
+compleat_pairs[,1:2] <- t(apply(compleat_pairs[,1:2], 1, sort, decreasing = TRUE))
+
+# Remove duplicates & Final output 
+compleat_pairs <- compleat_pairs[!duplicated(paste0(compleat_pairs[,1], compleat_pairs[,2])), ]
+
+
+```
+
+
+## Analyze CORUM Data
+
+As we did in the previous, we will read the data from CORUM file and we will create a list *database_list* that has the complex name and it's members as a vector of strings. 
+
+```{r Load CORUM and make complex list}
+# load CORUM and make it dataframe
+corf <- read.delim(paste0(data_path,"humanComplexes.txt"), header = TRUE)
+
+# Create a list of vectors. Each vector contains the proteins of the complex (gene names)
+cor_list <- lapply(1:nrow(corf), function(ind) {
+  
+  # For each row of the dataframe go to the complex members column and store value -> res
+  res = corf[ind, 'subunits.Gene.name.']
+  
+  
+  # Break the complex of members, which are separated by ; 
+  res = unique(unlist(strsplit(res, split = "[;// ]+")))
+  
+  # Filter away "None" and empty "" entries
+  res[!res %in% c("None", "")]
+  
+})
+```
+
+Then we make changes to our list and extract the protein pairs that correspond to each complex
+
+```{r CORUM names and remove duplicates}
+# Name the complexes
+names(cor_list) <- corf$ComplexName
+
+# Complex size range between 2 and 2 constituents 
+cor_final <- cor_list[sapply(cor_list, function(x) length(x) > 2 & length(x) < 20)]
+
+# this returns a dataframe 
+corum_pairs <- do.call(rbind, lapply(1:length(cor_final), function(i) {
+  
+  complex_i <- cor_final[i]
+  
+  # take each row from list, make combination of the pairs and transpose the matrix, convert into dataframe 
+  protein_pairs <- as.data.frame(t(combn(unlist(complex_i),2)))
+  
+  # name the third column of the dataframe complex and write the complex description  
+  protein_pairs$complex <- names(complex_i)
+  
+  return(protein_pairs)
+}))
+
+# Sort each pair in each row, so when we have duplicates they will form the same string (first word > second word) 
+corum_pairs[,1:2] <- t(apply(corum_pairs[,1:2], 1, sort, decreasing = TRUE))
+
+# Remove duplicates, remove same strings 
+corum_pairs <- corum_pairs[!duplicated(paste0(corum_pairs[,1], corum_pairs[,2])), ]
+
+
+```
+
+Finally we will check if there is degeneracy in Corum's and Compleat gene names. Merge both databases together. 
+
+```{r Check degeneracy for Databases and Merge them}
+# Check gene symbols of CORUM Pairs and change them in each column 
+checked_1 <- checkGeneSymbols(corum_pairs[,"V1"], unmapped.as.na = FALSE, map = hgnc.table)
+checked_2 <- checkGeneSymbols(corum_pairs[,"V2"], unmapped.as.na = FALSE, map = hgnc.table)
+
+corum_pairs_new <- corum_pairs %>%
+  mutate(
+    V1 = checked_1[,"Suggested.Symbol"],
+    V2 = checked_2[,"Suggested.Symbol"]
+    )
+
+# some entries have more than one symbols 
+# bool <- sapply(corum_pairs_new$V1, nchar) > 7
+# bool <- sapply(corum_pairs_new$V2, nchar) > 7
+# corum_pairs_new[bool,]
+
+# Check Gene symbols of Compleat Pairs and change them in each column
+com_checked_1 <- checkGeneSymbols(compleat_pairs[,"V1"], unmapped.as.na = FALSE, map = hgnc.table)
+com_checked_2 <- checkGeneSymbols(compleat_pairs[,"V2"], unmapped.as.na = FALSE, map = hgnc.table)
+
+compleat_pairs_new <- compleat_pairs %>%
+  mutate(
+    V1 = com_checked_1[,"Suggested.Symbol"],
+    V2 = com_checked_2[,"Suggested.Symbol"]
+    )
+
+# Merge both databases using anti_join (pairs that exist in Corum and not in Compleat) and bind rows with compleat  
+merged_pairs <- corum_pairs_new %>%
+  anti_join(compleat_pairs_new, by = c("V1", "V2")) %>%
+  bind_rows(compleat_pairs_new)
+
+# We have already sorted both databases to keep the same direction of columns - we do it again - remove duplications 
+merged_pairs[,1:2] <- t(apply(merged_pairs[,1:2],1,sort,decreasing=TRUE))
+merged_pairs <- merged_pairs[!duplicated(paste0(merged_pairs[,1], merged_pairs[,2])), ]
+```
+
+## COMPLEAT and CORUM size and pair number comparison
+
+```{r Total complex number Plots}
+# Take the final lists of both databases and get a dataframe complex/size
+corum_size <- as.data.frame(unlist(lapply(cor_final, length)))
+colnames(corum_size) <- "size"
+
+
+compleat_size <- as.data.frame(unlist(lapply(compleat_genes, length)))
+colnames(compleat_size) <- "size"
+
+# Sameplot both Databases 
+my_plot <- ggplot() +
+  geom_density(data = corum_size, aes(x = size, y = after_stat(count), fill = "Corum"), alpha = 0.5, bw = 0.5) +
+  geom_density(data = compleat_size, aes(x = size, y = after_stat(count), fill = "Compleat"), alpha = 0.5, bw = 0.5) +
+  labs(title = "Distribution of Protein Complex Size",
+       x = "Protein Complex Size",
+       y = "Number of Protein complexes") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Corum" = "skyblue", "Compleat" = "darkblue"), name = "Databases") +
+  guides(fill = guide_legend(title = "Databases"))
+
+#print
+my_plot
+
+# Save the plot as a high-quality PNG file
+ggsave(paste0(figure_path,"total_comparison.png"), plot = my_plot, width = 8, height = 6, dpi = 600)
+```
+
+
+``` {r Relative Frequency Plot}
+# Same plot but only densities
+my_plot2 <- ggplot() +
+  geom_density(data = corum_size, aes(x = size, y = after_stat(density), fill = "Corum"), alpha = 0.5, bw = 0.5) +
+  geom_density(data = compleat_size, aes(x = size, y = after_stat(density), fill = "Compleat"), alpha = 0.3, bw = 0.5) +
+  labs(title = "Distribution of Protein Complex Size",
+       x = "Protein Complex Size",
+       y = "Abundance of protein complexes") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Corum" = "skyblue", "Compleat" = "darkblue"), name = "Databases") +
+  guides(fill = guide_legend(title = "Databases"))
+
+my_plot2
+
+# Save the plot as a high-quality PNG file
+ggsave(paste0(figure_path,"density_comparison.png"), plot = my_plot2, width = 8, height = 6, dpi = 600)
+
+```
+
+
+```{r Venn diagram different pairs}
+# We have sorted the pairs of both databases, and removed duplicates. Create a set of words from each database
+# Compleat pairs
+set1 <- apply(compleat_pairs[,1:2], 1, paste, collapse="")
+# Corum pairs 
+set2 <- apply(corum_pairs[,1:2], 1, paste, collapse="")
+
+# Chart
+plot_ven <- venn.diagram(
+        x = list(set2, set1),
+        category.names = c("Corum" , "Compleat"),
+        filename = paste0(figure_path,"database_venn.tiff"),
+        output=TRUE,
+        
+        # Output features
+        imagetype="tiff" ,
+        height = 700 , 
+        width = 700 , 
+        resolution = 600,
+        compression = "lzw",
+        
+        # Circles
+        lwd = 0.35,
+        # lty = 'blank',
+        fill = c("skyblue","darkblue"),
+        alpha = 0.5,
+        
+      
+        # Numbers
+        cex = .25,
+        fontface = "italic",
+        fontfamily = "sans",
+        
+        # Set names
+        cat.cex = 0.3,
+        cat.fontface = "bold",
+        cat.default.pos = "outer",
+        cat.pos = c(1, 6),
+        cat.dist = c(0.040, 0.040),
+        cat.fontfamily = "Arial",
+        
+)
+```
+
+
+```{r Venn diagram different pairs after degeneracy fix}
+# We have sorted the pairs of both databases, and removed duplicates. Create a set of words from each database
+# Compleat pairs
+set1 <- apply(compleat_pairs_new[,1:2], 1, paste, collapse="")
+# Corum pairs 
+set2 <- apply(corum_pairs_new[,1:2], 1, paste, collapse="")
+
+# Chart
+plot_ven <- venn.diagram(
+        x = list(set2, set1),
+        category.names = c("Corum" , "Compleat"),
+        filename = paste0(figure_path,"database_venn_new.tiff"),
+        output=TRUE,
+        
+        # Output features
+        imagetype="tiff" ,
+        height = 700 , 
+        width = 700 , 
+        resolution = 600,
+        compression = "lzw",
+        
+        # Circles
+        lwd = 0.35,
+        # lty = 'blank',
+        fill = c("skyblue","darkblue"),
+        alpha = 0.5,
+        
+      
+        # Numbers
+        cex = .25,
+        fontface = "italic",
+        fontfamily = "sans",
+        
+        # Set names
+        cat.cex = 0.3,
+        cat.fontface = "bold",
+        cat.default.pos = "outer",
+        cat.pos = c(1, 6),
+        cat.dist = c(0.040, 0.040),
+        cat.fontfamily = "Arial",
+        
+)
+```
+
+
+
+```{r Clean enviroment}
+# save outputs to Data directory
+write.table(merged_pairs, paste0(save_path,"merged_pairs.txt"), sep = '\t')
+write.table(corum_pairs, paste0(save_path,"corum_pairs.txt"), sep = '\t')
+write.table(compleat_pairs, paste0(save_path,"compleat_pairs.txt"), sep = '\t')
+
+# List the variables you want to keep
+variables_to_keep <- c("compleat_pairs", "corum_pairs", "merged_pairs","data_path","figure_path","save_path")
+
+
+# Remove all variables except the ones in variables_to_keep
+rm(list = setdiff(ls(), variables_to_keep))
+```
+
+
+
+# Access and Analyze SCBC (subcellular proteomics) Data
+
+## Load Data from SCBC and make a List of frames 
+The output of the SCBC pipeline is xlxx file containing multiple sheets, each sheet is a cell line. In each spreadsheet we have the log transformed values of each protein measurement in respect to each subcellular compartment in duplicates.
+
+We need to break down each sheet by creating a list using lapply. The iteration of lapply is working for each cell type, which corresponds to spreadsheet  
+
+```{r Load SCBC data}
+# Subcell protein quant
+protein_tab_sheets <- getSheetNames(paste0(data_path,"SCBC2_ProteomeQuantProfile_13CLsOnly.xlsx"))
+protein_tab_sheets <- protein_tab_sheets[-1]
+names(protein_tab_sheets) <- c("A431", "MCF7", "H322", "HCC827", "U251", "H1568", "H1975","H2009", "H727", "HeLa", "A375", "HCT116", "U2OS") 
+
+# Summarized quant.
+protein_quant_all <- lapply(names(protein_tab_sheets) , function(i) {
+  
+  print(i)
+  
+  sheet_name <- protein_tab_sheets[i]
+  
+  protein_quant <- read.xlsx(paste0(data_path,"SCBC2_ProteomeQuantProfile_13CLsOnly.xlsx"), sheet = sheet_name)
+  
+  protein_quant_dt <- protein_quant[, -c(1, ncol(protein_quant))]
+  
+  # Check if the samples are log normalized and compute if not 
+  if(all(range(protein_quant_dt) >= 0)) {
+    protein_quant_dt <- log2(protein_quant_dt)
+  }
+  
+  protein_quant_dt$gene <- protein_quant$Protein
+  
+  protein_quant_dt
+  
+})
+```
+```{r Merge all sheets to df}
+merge.fun <- function(x, y) merge(x, y, by = 'gene', all = TRUE)
+protein_quant_merged <- Reduce(merge.fun, protein_quant_all)
+
+# Remove duplicated
+protein_quant_merged <- protein_quant_merged[!duplicated(protein_quant_merged$gene), ]
+
+rownames(protein_quant_merged) <- protein_quant_merged$gene
+protein_quant_merged$gene <- NULL
+
+```
+
+
+Here we choose proteins that are represented by at least half of the samples
+```{r 50% Filtering SCBC2}
+# Present in at least 50% of samples
+n_samples <- 0.5 * ncol(protein_quant_merged)
+
+# iterates each row and returns a Boolean based on the non-NAs 
+tokeep <- apply(protein_quant_merged, 1, function(i) sum(!is.na(i)) > n_samples)
+
+# subset the sample rows based on the Boolean. 
+protein_quant_merged <- protein_quant_merged[tokeep, ]
+```
+
+
+# Access and Analyze ABMS (total cell proteomics) Data 
+
+## Load Data from ABMS and make a List of frames 
+
+```{r Load and make dataframe}
+# Data
+celllines_meta <- read.csv(paste0(data_path,"ABMS_meta_data.csv"))
+
+## Protein quant.
+protein_table <- read.delim(paste0(data_path,"genes_table.txt"), sep = '\t')
+
+#change a column name
+colnames(protein_table)[colnames(protein_table) == "X__POOL_HCC827_L1_Set1_tmt10plex_126"] <- 'X__POOL_HCC827_E1_Set1_tmt10plex_126'
+
+# create a new dataframe by subsetting protein tables, by taking all rows, where columns have the measurements.
+protein_quant <- protein_table[, celllines_meta$init_id]
+
+```
+
+Based on the MS quantification, we will normalize to the median for each value in the ABMS. Each cell line belonged to a specific set from 1 to 6 and with a specific TMT. So we take advantage of that pattern to take each column. Grep finds the set word inside the column name 
+
+```{r Make changes to the ABMS dataframe}
+
+# Create a vector with string Set and "number" form 1-6 
+sets <- paste0('Set', 1:6)
+
+# you will bind by column the outcome of lapply in each iteration  
+protein_quant_norm <- do.call(cbind, lapply(sets, function(i) {
+  
+  # square the result of all rows, and columns sub-setted by grep which finds columns that match the pattern
+  dt <- 2^protein_quant[, grep(i, colnames(protein_quant))]
+  
+  # normalize to the median across samples
+  dt <- sweep(dt, 1, apply(dt, 1, median, na.rm = TRUE), '/')
+  dt <- log2(dt)
+  
+}))
+
+rownames(protein_quant_norm) <- protein_table$Gene.Name
+protein_quant_norm <- protein_quant_norm[, colnames(protein_quant)]
+
+# Present in at least 50% of samples
+n_samples_abms <- 0.5 * ncol(protein_quant_norm)
+
+# create this Boolean vector using apply to a df. T/F that keeps True is anything more than 50% 
+tokeep <- apply(protein_quant_norm, 1, function(i) sum(!is.na(i)) > n_samples_abms)
+protein_quant_norm <- protein_quant_norm[tokeep, ]
+
+```
+
+
+
+# Access and Analyze scRNAseq data from HPA
+
+```{r Load and format data}
+# read Data 
+scdata <- read.delim(paste0(data_path,"rna_single_cell_type.tsv"))
+
+#long to wide
+wide_sc <- pivot_wider(scdata, names_from = Cell.type, 
+                       values_from = nTPM)
+
+# check and subset rows with NA values
+sc_data <- wide_sc[!rowSums(is.na(wide_sc)) > 0,]
+
+# check each row how many zero values
+rowSums(wide_sc == 0)
+mingene <- rowSums(wide_sc > 0) > 40
+sc_data <- sc_data[mingene, -1]
+
+
+# We have duplication in the gene.name column 
+dup_id <- which(duplicated(sc_data$Gene.name) | duplicated(sc_data$Gene.name, fromLast = TRUE))
+
+sc_data[dup_id,1:5] %>%
+  arrange(Gene.name)
+
+# subset without duplications (12 genes in total - 6 pairs) until we change our minds
+sc_data_cleaned <- sc_data[-dup_id,]
+
+
+#make it a DF and put rownames after duplication removal
+sc_final <- sc_data_cleaned %>% 
+  as.data.frame() %>%
+  `rownames<-`(.,sc_data_cleaned$Gene.name) %>%
+  select(-Gene.name)
+
+
+```
+
+
+
+
+```{r Clean enviroment - Keep Data for Correlation Analysis}
+# List the variables you want to keep
+variables_to_keep <- c("compleat_pairs", "corum_pairs", "merged_pairs", "protein_quant_merged", "protein_quant_norm", "sc_final","data_path","save_path", "figure_path")
+
+# Remove all variables except the ones in variables_to_keep
+rm(list = setdiff(ls(), variables_to_keep))
+```
+
+
+# Correlation matrices
+We will use this function to generate all possible protein pairs that exist within the database of our choice. We will subset our dataset based on all the genes that exist in the database, perform pairwise correlation analysis and will label each protein pair with T of R based on whether they belong to the same protein complex or not.
+
+The Database serves as our ground truth and poses a restriction to the maximum number of True observations.
+
+
+## Corelation function for protein pairs within the Database
+The arguments of the correlation analysis function:
+
+*dat* -> dataframes of SCBC or ABMS for each protein and it's relevant abundance. I will create pairwise correlation matrices 
+
+*adj_mat* -> dataframes from my Databases (COMPLEAT or CORUM or combined), which serve as ground truth for ppi
+
+*cor_type* -> type of the correlation coefficient
+
+*pairs_name* -> name of the dataset whose pairs we are using as input 
+
+*dat_name* -> Name of the Database used as ground truth 
+
+```{r Corelation matrix Function}
+
+# Compares the rows of protein expression files with a vector containing the true pairs of each database. Unique makes you get unique elements from the combination
+cor_mat_fun <- function(dat, adj_mat, cor_type, pairs_name, dat_name) {
+  common_genes <- intersect(unique(c(adj_mat[,1], adj_mat[,2])), rownames(dat))
+
+  #Subset by row the database and protein expression files based on common genes 
+  adj_mat <- adj_mat[adj_mat[,1] %in% common_genes & adj_mat[,2] %in% common_genes, ]
+  dat_common <- dat[common_genes, ]
+  
+  print("Started correlation analysis")
+  # correlation matrix, we transpose because genes must be on columns 
+  cor_mat <-  cor(t(as.matrix(dat_common)), use = 'pairwise.complete.obs', method = cor_type)
+  
+  print("Finished correlation analysis")
+  
+  # you reshape them into pairs
+  cor_mat <- reshape2::melt(cor_mat)
+  # we set > for letters to remove duplicates upper triangular matrix 
+  cor_mat <- cor_mat[as.character(cor_mat$Var1) > as.character(cor_mat$Var2), ]
+  
+  
+  # Use paste function to concatenate the protein pair into a single string
+  # Compare the string from cor matrix and string from Database 
+  cor_mat$db <- ifelse(paste0(cor_mat[,1], '_', cor_mat[,2]) %in% paste0(adj_mat[,1], '_', adj_mat[,2]), 'T', 'F')
+  
+  #Make database entries Factors and use Table function
+  cor_mat$db <- as.factor(cor_mat$db)
+  freq_db <- as.data.frame(table(cor_mat$db))
+  colnames(freq_db)[1] <- 'db'
+
+  p_cor_distr <- ggplot(cor_mat, aes(x = db, y = value, fill = db)) +
+   geom_violin(alpha=0.4) +
+    geom_text(data = freq_db, aes(label = paste0('n = ', Freq), y = -1), vjust = 0.2) +
+    geom_boxplot(width = 0.2) +
+    labs(x = paste0(pairs_name, ' pairs'), y = 'Spearman\'s cor.') +
+    labs(fill = "Class") +
+    theme_classic()
+
+  png(paste0(figure_path, dat_name, '_pairwise_cor_', pairs_name, '.png'), width = 800, height = 600)
+  plot(p_cor_distr)
+  dev.off()
+
+  return(cor_mat)
+}
+```
+
+
+```{r Run cor Function for datasets}
+# Put variables of SCBC and COMPLEAT to work it as an example, once.
+corum_scbc_cormat <- cor_mat_fun(dat = protein_quant_merged, adj_mat = corum_pairs, cor_type = "spearman", dat_name = 'SCBC', pairs_name = "Corum")
+
+corum_abms_cormat <- cor_mat_fun(dat = protein_quant_norm, adj_mat = corum_pairs, cor_type = "spearman", dat_name = 'ABMS', pairs_name = "Corum")
+
+comb_scbc_cormat <- cor_mat_fun(dat = protein_quant_merged, adj_mat = merged_pairs, cor_type = "spearman", dat_name = 'SCBC', pairs_name = "combined")
+
+comb_abms_cormat <- cor_mat_fun(dat = protein_quant_norm, adj_mat = merged_pairs, cor_type = "spearman", dat_name = 'ABMS', pairs_name = "combined")
+
+#s_RNA_cor_mat <- cor_mat_fun(dat = sc_final, adj_mat = merged_pairs, cor_type = "spearman", dat_name = 'RNA', pairs_name = "Combined")
+
+```
+
+
+```{r Merge DFs into 2 and 3}
+# merge SCBC and ABMS together 
+merged_cor <- merge(comb_scbc_cormat, comb_abms_cormat, by = c("Var1", "Var2"))
+merged_cor <- merged_cor[,c(1:3,5,6)]
+colnames(merged_cor) <- c("Var1", "Var2", "SCBC", "ABMS", "db")
+
+
+new <- merged_cor %>%
+  mutate(
+    synergy = log(SCBC * ABMS), .after = ABMS
+  )
+
+pos <- new[new$db=="T",]
+pos <- pos[pos$SCBC>0 & pos$ABMS>0,]
+
+neg <- new[new$db =="F",]
+neg <- neg[neg$SCBC>0 & neg$ABMS>0,]
+
+alt <- new[new$SCBC>0 & new$ABMS>0,]
+  freq_altdb <- as.data.frame(table(alt$db))
+  colnames(freq_altdb)[1] <- 'db'
+
+  p_cor_distr <- ggplot(alt, aes(x = db, y = synergy, fill = db)) +
+   geom_violin(alpha=0.4) +
+    geom_text(data = freq_altdb, aes(label = paste0('n = ', Freq), y = -1), vjust = 0.2) +
+    geom_boxplot(width = 0.2) +
+    labs(x = paste0('merged pairs'), y = 'Spearman\'s cor.') +
+    labs(fill = "Class") +
+    theme_classic()
+# merge single cell transcriptomics with SCBC-ABMS
+#merged_cor_2 <- merged_cor %>%
+ # merge(s_RNA_cor_mat, by = c("Var1", "Var2")) %>%
+  #select(c(1:4,6,7)) %>%
+  #`colnames<-`(c("Var1", "Var2", "SCBC", "ABMS", "scRNA", "db"))
+
+
+```
+
+
+## Correlation analysis of all the proteins of the Datasets
+We will run all possible pairwise correlations from our three different datasets. We will use the multiple logistic regression to predict which protein pairs belong to the same complex and which do not. 
+
+```{r Run all the possible pairwise corelations and save them}
+
+## Un-comment if run for the first time
+# # Filter
+# scbc_quant <- protein_quant_merged[apply(protein_quant_merged, 1, function(i) sum(!is.na(i))) > ncol(protein_quant_merged)/2, ]
+# abms_quant <- abms_quant[apply(abms_quant, 1, function(i) sum(!is.na(i))) > ncol(abms_quant)/2, ]
+# sc_quant <- sc_quant[apply(sc_quant, 1, function(i) sum(i != 0)) > 25, ]
+# 
+# # Common gene symbols
+# common_genes_all <- Reduce(intersect, list(rownames(protein_quant_merged), 
+#                                            rownames(protein_quant_norm),
+#                                            rownames(sc_final)))
+# 
+# cor_mat_list <- lapply(list(protein_quant_merged, protein_quant_norm, sc_final), function(dt) {
+# 
+#   dt_all <- dt[common_genes_all, ]
+#   cor_mat_all <-  cor(t(as.matrix(dt_all)), use = 'pairwise.complete.obs', method = 'spearman')
+#   cor_mat_all <- reshape2::melt(cor_mat_all)
+#   cor_mat_all <- cor_mat_all[as.character(cor_mat_all$Var1) > as.character(cor_mat_all$Var2), ]
+# 
+#   })
+# 
+
+# Merge 
+# merged.fun.all <- function(x, y) merge(x,y, by = c("Var1", "Var2"))
+# 
+# merged_cor_all <- Reduce(merged.fun.all, cor_mat_list)
+# 
+# colnames(merged_cor_all) <- c('protein1', 'protein2', 'SCBC', 'ABMS', 'scRNA')
+# 
+# merged_cor_all$db <-  paste0(merged_cor_all[,1], '_', merged_cor_all[,2]) %in% paste0(corum_pairs[,1], '_', corum_pairs[,2])
+
+```
+
+
+```{r Clean enviroment - Keep Data for Classifier}
+# Save processed proteomics and transcriptomics data
+# Write data
+write.table(protein_quant_merged, paste0(save_path,'protein_quant_merged.txt'), sep = '\t')
+write.table(protein_quant_norm, paste0(save_path,'prot_abms_norm.txt'), sep = '\t')
+write.table(sc_final, paste0(save_path,'scRNAseq_processed.txt'), sep = '\t')
+
+# save correlations subsetted with True/False classes
+write.table(comb_scbc_cormat, paste0(save_path, 'comb_scbc_cormat.txt'), sep = '\t')
+write.table(comb_abms_cormat, paste0(save_path,'comb_abms_cormat.txt'), sep = '\t')
+# write.table(com_RNA_cor_mat, '../data/Processed/s_RNA_cor_mat.txt', sep = '\t')
+write.table(new, paste0(save_path,'merged_cor.txt'), sep = '\t')
+# write.table(merged_cor_2, '../data/Processed/merged_cor_2.txt', sep = '\t')
+#write.table(merged_cor_all, '../data/Processed/merged_cor_all.txt', sep = '\t')
+
+
+```
+
+
+
+```{r Clean enviroment - Keep Final Data}
+# List the variables you want to keep
+variables_to_keep <- c("compleat_pairs", "corum_pairs", "merged_pairs", "protein_quant_merged", "protein_quant_norm", 
+                       "sc_final","s_scbc_cor_mat", "s_abms_cor_mat","s_RNA_cor_mat", "merged_cor", "merged_cor_2", "merged_cor_all")
+
+# Remove all variables except the ones in variables_to_keep
+rm(list = setdiff(ls(), variables_to_keep))
+```

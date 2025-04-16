@@ -1,5 +1,15 @@
-# Table of Contents
-
+# Proteomics in the Latent Space 
+This project is ongoing - it is updated from time to time 
+## Table of Contents
+* [Proteomics in the Latent Space](#proteomics-in-the-latent-space)
+    * [Table of Contents](#table-of-contents)
+    * [Project Structure](#project-structure)
+    * [Description of the Pipeline](#description-of-the-pipeline)   
+    * [Some interesting results of VAE-based proteomics](#description-of-the-pipeline)
+        * [VAE training-test set results](#vae-training-test-set-results)
+        * [Proteoform classifier using extracted features from Latent Variables](#proteoform-classifier-using-extracted-features-from-latent-variables)
+    *[Things to Consider or Change](#things-to-consider-or-change)
+        * [Reproducibility](#making-the-project-reproducible-seed-and-device-check)
 
 
 ## Project Structure 
@@ -8,13 +18,14 @@ proteomics_in_latent_space/                 # Project Root
 │
 ├── 00a_hyperparam_optimization.ipynb       # Script to optimize hyperparam (learning rate & bit Regularlization of KL term)
 ├── 00b_hyperparam_optimization.ipynb       # Script to optimize dimensions of the VAE for each dataset (coupled to ML classifier)
-├── 00c_classifiers_tuning.ipynb            # Script to optimize different ML models for PPI prediction 
+├── 00c_classifiers_tuning.ipynb            # Script to optimize different ML models for PPI prediction  (not uploaded yet)
 | 
 ├── 01_run_model_SCBC.ipynb                 # Script to run the subcell proteomics data
 ├── 01b_run_model_SCBC_whole_proteoform     # Script to run the subcell proteoform tables with no gene symbol annotations.
 ├── 02_run_model_ABMS.ipynb                 # Script to run the total-cell proteomics data (or any MS protein table)
 ├── 02b_run_model_ABMS whole_proteoform     # Script to run the total-cell proteoform tables 
 ├── 03a_feat_eng_protein.ipynb              # Script from the ML for creating features for ppi predictions
+├── 03b_feat_eng_protein.ipynb              # Script from the ML for creating features for ppi predictions
 ├── 04_ppi_predictions.ipynb                # Script from the ML for the final classifier and the prediction table generation
 |
 |
@@ -29,9 +40,9 @@ proteomics_in_latent_space/                 # Project Root
 │   ├── VAE2.py                              #  VAE with deeper architecture (need to update it)
 │
 ├── r_util/                                 # R scripts for analysis & figures (not uploaded yet)
-│   ├──                                     
+│   ├──                                      # RMD files used to generate protein tables and ground truth PPI data 
 │
-├── data/                                    # Folder to store datasets
+├── data/                                    # Folder to store datasets and processed data 
 │   ├── processed/
 │       ├── prot_abms_norm.txt               # Total Cell proteomics
 │       ├── protein_quant_merged.txt         # Subcellular proteomics   
@@ -58,6 +69,7 @@ proteomics_in_latent_space/                 # Project Root
 |
 │
 ├── enviroment.yml                          # Dependencies for python enviroment
+├── scbc3.yml                               # Lighter python enviroment
 |                           
 ├── .gitignore                               # 
 ```
@@ -65,16 +77,26 @@ proteomics_in_latent_space/                 # Project Root
 
 ## Description of the Pipeline
 
+- In the following pipeline I utilized a VAE to perform lossless compression to different protein matrices with the aim to extract the latent variables and experiment on
+their predictive value of protein-protein interactions (proteoform)
+- Then, I reconstructed cancer proteomic networks of different datat type (subcellular and total cell Mass Spec data) by using PPI classifiers.
+- A network integration approach will follow the reconstruction, where I wish to analyze proteo(form) networks of pan-cancer data and uncover some hidden associations.
+
+![](figures/selected/features_final.gif) <br>
 
 
+## Some Intersting results of the application of VAE to proteomics data <br>
+
+### VAE training-test set results <br>
+![](figures/selected/scbc_vae_run.png)
+<br>
+
+### Proteoform classifier using extracted features from Latent Variables <br>
+![](figures/selected/proteoform_classifier.png)
+<br>
 
 
-## Some Intersting results of the application of VAE to proteomics data 
-
-
-
-
-## Thigs to Consider or Change
+## Things to Consider or Change
 
 ### Making the Project Reproducible (seed and device check)
 Since Jupyter **does not reset** the RNG state between cells, we need to explicitly call set_seed() inside each module in the `model_util` folder.<br>

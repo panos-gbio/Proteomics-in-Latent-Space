@@ -4,7 +4,6 @@
 # More details can be found at: https://github.com/RasmussenLab/pimms
 # The Cost function is based on the ELBO and I used bits per dim for KL-divergence
 # reguralizaton. https://github.com/ronaldiscool/VAETutorial
-# corrections for the cost function based on Continuous - Bernoulli MLE approach for scaled (0,1) data.
 
 
 # import libraries 

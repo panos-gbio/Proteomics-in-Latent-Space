@@ -7,6 +7,12 @@ import pandas as pd
 import numpy as np
 import gc
 
+# plotting
+import matplotlib.pyplot as plt
+import seaborn as sns 
+
+#ml libraries
+from sklearn.metrics import confusion_matrix, classification_report, recall_score,precision_score, accuracy_score
 
 
 
@@ -246,3 +252,87 @@ def compute_distances_blockwise(quant_df_sub,ground_truth=None, data_name="SCBC_
     print(f"Analysis is completed")
     print("\n")
     return result
+
+
+
+def compute_metrics(y_true, y_predprob, threshold=0.5):
+    """
+    Given true labels, predicted probabilities, and a threshold,
+    computes the confusion matrix and metrics:
+      - TPR (sensitivity)
+      - FPR
+      - FDR = FP / (TP + FP)  (set to np.nan if no predictions)
+    Returns:
+      conf_mat, TPR, FPR, FDR
+    """
+    # Predictions: class 1 if probability >= threshold, else 0.
+    y_db = np.where(y_predprob > threshold, 1,0)
+    
+    cm = confusion_matrix(y_true, y_db, labels=[1, 0])
+    TP, FN, FP, TN = cm.ravel() 
+    
+    # Compute metrics; be careful with divisions by zero.
+    TPR = TP / (TP + FN) if (TP + FN) > 0 else np.nan
+    FPR = FP / (FP + TN) if (FP + TN) > 0 else np.nan
+    # FDR: proportion of predicted positives that are false.
+    FDR = FP / (TP + FP) if (TP + FP) > 0 else np.nan
+    
+    return cm, TPR, FPR, FDR
+
+
+
+def get_probthreshold(y_test, y_predprob, target_FDR, classifier_type, fdr_tol=0.005, tol=0.005, max_iter=50):
+    
+    """
+    Optimizes the classifier probability threshold using a bisection search so that the false discovery rate (FDR) 
+    is as close as possible to, but not above, a specified target.
+
+    Notes:
+    - The confusion matrix is plotted with the positive class listed first.
+    - It implements compute_metrics function.
+    - A bisection search is used to find optimal threshold with min probability of 0.5
+    - The optimal threshold as well as the confusion matrix are printed.
+
+    """
+    
+    
+    low, high = 0.5, 1.0
+    best_threshold = None
+    for i in range(max_iter):
+        mid = (low + high) / 2
+        cm, TPR, FPR, FDR = compute_metrics(y_test, y_predprob, mid)
+
+        print(f"Iteration {i}: threshold={mid:.4f}, FDR={FDR:.4f}, TPR={TPR:.4f}, FPR={FPR:.4f}")
+        
+        if np.isnan(FDR):
+            # No positives predicted; move threshold downward.
+            high = mid
+        elif FDR - target_FDR > fdr_tol:
+            # FDR is too high.
+            low = mid
+        else:
+            best_threshold = mid 
+            high = mid
+            
+        # Check for convergence
+        if high - low < tol:
+            break
+
+    if best_threshold is None:
+        print("Could not find a threshold meeting the target FDR; consider adjusting target_FDR or checking classifier performance.")
+    else:
+        print(f"\nOptimal threshold found: {best_threshold:.3f}")
+        # Compute final confusion matrix and metrics at optimal threshold.
+        cm_opt, TPR_opt, FPR_opt, FDR_opt = compute_metrics(y_test, y_predprob, best_threshold)
+        print(f"TPR: {TPR_opt:.3f}, FPR: {FPR_opt:.3f}, FDR: {FDR_opt:.3f}")
+        
+        # --- Plot heatmap of the confusion matrix ---
+    plt.figure(figsize=(8, 5))
+    sns.heatmap(cm, annot=True, fmt='d',cmap='YlGnBu',
+                xticklabels=['Positive', 'Negative'],
+                yticklabels=['Positive', 'Negative'])
+    plt.title(f"{classifier_type} Classification Threshold on {round(FDR_opt*100)}% FDR\n p = {best_threshold:.3f}", fontsize=14,
+            y=1.05)
+    plt.ylabel("Actual")
+    plt.xlabel("Predicted")
+    plt.show()
