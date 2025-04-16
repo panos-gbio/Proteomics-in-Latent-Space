@@ -8,7 +8,7 @@ This project is ongoing - it is updated from time to time
     * [Some interesting results of VAE-based proteomics](#description-of-the-pipeline)
         * [VAE training-test set results](#vae-training-test-set-results)
         * [Proteoform classifier using extracted features from Latent Variables](#proteoform-classifier-using-extracted-features-from-latent-variables)
-    *[Things to Consider or Change](#things-to-consider-or-change)
+    * [Things to Consider or Change](#things-to-consider-or-change)
         * [Reproducibility](#making-the-project-reproducible-seed-and-device-check)
 
 
